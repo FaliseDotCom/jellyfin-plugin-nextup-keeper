@@ -1,0 +1,8 @@
+bin/
+obj/
+out/
+pkg/
+*.zip
+.vs/
+*.user
+test/run/

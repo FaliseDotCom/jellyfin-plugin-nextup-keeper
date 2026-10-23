@@ -1,0 +1,114 @@
+name: Build plugin
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Plugin metadata lives in build.yaml only; everything below reads it from there.
+      - name: Metadata
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+          else
+            V="$(yq -r '.version' build.yaml)"
+          fi
+          # Jellyfin wants four parts
+          while [[ $(echo "$V" | tr -cd '.' | wc -c) -lt 3 ]]; do V="$V.0"; done
+          {
+            echo "version=$V"
+            echo "guid=$(yq -r '.guid' build.yaml)"
+            echo "name=$(yq -r '.name' build.yaml)"
+            echo "abi=$(yq -r '.targetAbi' build.yaml)"
+            echo "category=$(yq -r '.category' build.yaml)"
+            echo "overview=$(yq -r '.overview' build.yaml)"
+            echo "description=$(yq -r '.description' build.yaml | tr '\n' ' ' | sed 's/ *$//')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          dotnet publish Jellyfin.Plugin.NextUpKeeper/Jellyfin.Plugin.NextUpKeeper.csproj \
+            -c Release -o out \
+            -p:AssemblyVersion=${{ steps.meta.outputs.version }} \
+            -p:FileVersion=${{ steps.meta.outputs.version }}
+
+      - name: Package
+        id: pkg
+        env:
+          V: ${{ steps.meta.outputs.version }}
+          GUID: ${{ steps.meta.outputs.guid }}
+          NAME: ${{ steps.meta.outputs.name }}
+          ABI: ${{ steps.meta.outputs.abi }}
+          CATEGORY: ${{ steps.meta.outputs.category }}
+          OVERVIEW: ${{ steps.meta.outputs.overview }}
+          DESCRIPTION: ${{ steps.meta.outputs.description }}
+        run: |
+          mkdir -p pkg
+          cp out/Jellyfin.Plugin.NextUpKeeper.dll pkg/
+          jq -n --arg v "$V" --arg guid "$GUID" --arg name "$NAME" --arg abi "$ABI" \
+             --arg category "$CATEGORY" --arg overview "$OVERVIEW" --arg description "$DESCRIPTION" \
+             --arg owner "$GITHUB_REPOSITORY_OWNER" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+            {category: $category, changelog: "", description: $description, guid: $guid, name: $name,
+             overview: $overview, owner: $owner, targetAbi: $abi, timestamp: $ts, version: $v,
+             status: "Active", autoUpdate: true, assemblies: []}' > pkg/meta.json
+          ZIP="nextupkeeper_${V}.zip"
+          (cd pkg && zip -q "../$ZIP" *)
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "md5=$(md5sum "$ZIP" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextupkeeper-${{ steps.meta.outputs.version }}
+          path: pkg/*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.pkg.outputs.zip }}" --title "$GITHUB_REF_NAME" --notes "Next Up Keeper ${{ steps.meta.outputs.version }}"
+
+      - name: Update plugin repository manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          V: ${{ steps.meta.outputs.version }}
+          GUID: ${{ steps.meta.outputs.guid }}
+          NAME: ${{ steps.meta.outputs.name }}
+          ABI: ${{ steps.meta.outputs.abi }}
+          CATEGORY: ${{ steps.meta.outputs.category }}
+          OVERVIEW: ${{ steps.meta.outputs.overview }}
+          DESCRIPTION: ${{ steps.meta.outputs.description }}
+          MD5: ${{ steps.pkg.outputs.md5 }}
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${{ steps.pkg.outputs.zip }}"
+          git fetch origin main
+          git checkout main
+          [ -f manifest.json ] || echo '[]' > manifest.json
+          jq --arg guid "$GUID" --arg v "$V" --arg abi "$ABI" --arg url "$URL" --arg md5 "$MD5" \
+             --arg name "$NAME" --arg category "$CATEGORY" --arg overview "$OVERVIEW" --arg description "$DESCRIPTION" \
+             --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg owner "$GITHUB_REPOSITORY_OWNER" '
+            def pkg: {version: $v, changelog: "", targetAbi: $abi, sourceUrl: $url, checksum: $md5, timestamp: $ts};
+            if any(.[]; .guid == $guid) then
+              map(if .guid == $guid then .versions = ([pkg] + (.versions | map(select(.version != $v)))) else . end)
+            else
+              . + [{guid: $guid, name: $name, description: $description, overview: $overview,
+                    owner: $owner, category: $category, versions: [pkg]}]
+            end' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Release $V" && git push origin main || echo "no manifest change"
