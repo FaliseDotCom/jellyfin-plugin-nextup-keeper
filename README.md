@@ -76,7 +76,8 @@ empty because of it.
 
 ## Compatibility
 
-Built against the Jellyfin 12.2.0 packages (`targetAbi` 12.2.0.0) and tested on Jellyfin 12.2.0.
+Built against the Jellyfin 12.2.0 packages (`targetAbi` 12.2.0.0) and tested on Jellyfin 12.2.0
+and 12.3.0.
 
 The plugin replaces the server's `ITVSeriesManager` registration with a wrapper. That is not an
 official extension point, so a Jellyfin update can break it: test again after every Jellyfin

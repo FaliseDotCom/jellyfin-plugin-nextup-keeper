@@ -89,3 +89,17 @@ The first call after a server start takes about 0.9 s with or without the plugin
 An earlier version checked resume points per episode through `Video.GetAllVersions()`, which hits
 the database for each episode and added about 230 ms. The lookup now gets all resumable episodes
 in one `IsResumable` query.
+
+## Jellyfin 12.3.0
+
+Checked on 2026-10-23 with the released 1.0.0 zip (built against 12.2.0), on the 12.2 test server
+upgraded in place to `jellyfin/jellyfin:12.3`, the same path as a Home Assistant add-on update.
+
+* Source diff `v12.2..v12.3`: 23 files, mostly rating and gain values that may not be NaN or
+  infinite. Nothing in Next Up, user data, item queries or service registration changed.
+* The plugin also compiles without errors or warnings against the 12.3.0 packages.
+* After the upgrade the plugin is *Active*, `progress.json` and the Next Up list are unchanged and
+  the backfill runs.
+* Scenarios 1, 1b, 3 to 7 and 9, rewatching and the single-series query all pass, on new test
+  series as well as existing ones.
+* Next Up with 200 added series: 18–20 ms warm, 29–33 ms right after a user data change.
